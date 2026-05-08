@@ -2,16 +2,15 @@ import yfinance as yf
 import ta
 import pandas as pd
 import warnings
-from datetime import time
+import time
+from datetime import datetime, time as dtime
 
 warnings.filterwarnings("ignore")
 
 # =========================================================
-# STOCK LIST
+# FULL STOCK LIST (YOUR ORIGINAL)
 # =========================================================
-
 stocks = [
-
     "GRWRHITECH","PFIZER","SUNDARMFIN","FINEORG","BAYERCROP",
     "INGERRAND","NETWEB","KAYNES","ORISSAMINE","SCHAEFFLER",
     "DATAPATTNS","CRISIL","THERMAX","LT","AIAENG","BSE",
@@ -37,392 +36,164 @@ stocks = [
 # =========================================================
 # SETTINGS
 # =========================================================
-
-SPIKE_THRESHOLD = 8      # 8X SPIKE
-RSI_LEVEL = 60           # RSI 60
-SL_PCT = 0.02            # 2% STOPLOSS
+SPIKE_THRESHOLD = 8
+RSI_LEVEL = 60
+SL_PCT = 0.02
 
 START_CAPITAL = 100000
 CAPITAL = START_CAPITAL
 
-# MARKET TIME
-START_TIME = time(9, 20)
-EXIT_TIME = time(15, 0)
-
-# STORE TRADES
 trades = []
-
-# ONLY ONE ACTIVE TRADE
 last_exit_time = None
 
+START_TIME = dtime(9, 20)
+EXIT_TIME = dtime(15, 0)
+
 # =========================================================
-# MAIN LOOP
+# MARKET TIME CHECK
 # =========================================================
+def market_open():
+    now = datetime.now()
 
-for stock in stocks:
+    # Monday-Friday only
+    if now.weekday() > 4:
+        return False
 
-    try:
+    # time filter
+    if now.time() < START_TIME or now.time() >= EXIT_TIME:
+        return False
 
-        # =================================================
-        # DOWNLOAD DATA
-        # =================================================
+    return True
 
-        data = yf.Ticker(stock + ".NS").history(
+# =========================================================
+# CORE STRATEGY
+# =========================================================
+def run_bot():
 
-            period="5d",
-            interval="5m"
+    global CAPITAL, last_exit_time, trades
 
-        )
+    for stock in stocks:
 
-        if data.empty or len(data) < 250:
-            continue
+        try:
+            data = yf.Ticker(stock + ".NS").history(period="5d", interval="5m")
 
-        # =================================================
-        # EMA
-        # =================================================
-
-        for ema in [9, 15, 21, 50, 100, 200]:
-
-            data[f"EMA{ema}"] = (
-
-                data["Close"]
-                .ewm(span=ema, adjust=False)
-                .mean()
-
-            )
-
-        # =================================================
-        # RSI
-        # =================================================
-
-        data["RSI"] = ta.momentum.RSIIndicator(
-
-            data["Close"]
-
-        ).rsi()
-
-        # =================================================
-        # CANDLE LOOP
-        # =================================================
-
-        for i in range(200, len(data)-2):
-
-            candle_time = data.index[i]
-
-            current_time = candle_time.time()
-
-            # =============================================
-            # ONLY 9:20 TO 3:00
-            # =============================================
-
-            if current_time < START_TIME:
+            if data.empty or len(data) < 200:
                 continue
 
-            if current_time >= EXIT_TIME:
-                continue
+            # EMA
+            data["EMA9"] = data["Close"].ewm(span=9).mean()
+            data["EMA15"] = data["Close"].ewm(span=15).mean()
+            data["EMA21"] = data["Close"].ewm(span=21).mean()
+            data["EMA50"] = data["Close"].ewm(span=50).mean()
+            data["EMA100"] = data["Close"].ewm(span=100).mean()
+            data["EMA200"] = data["Close"].ewm(span=200).mean()
 
-            # =============================================
-            # ONLY AFTER PREVIOUS EXIT
-            # =============================================
+            # RSI
+            data["RSI"] = ta.momentum.RSIIndicator(data["Close"]).rsi()
 
-            if last_exit_time is not None:
+            for i in range(200, len(data)-2):
 
-                if candle_time <= last_exit_time:
+                candle_time = data.index[i]
+
+                if last_exit_time and candle_time <= last_exit_time:
                     continue
 
-            # =============================================
-            # VOLUME
-            # =============================================
+                # volume spike
+                vol = data["Volume"].iloc[i]
+                avg_vol = data["Volume"].iloc[i-20:i].mean()
 
-            vol = data["Volume"].iloc[i]
+                if avg_vol == 0:
+                    continue
 
-            avg_vol = data["Volume"].iloc[i-20:i].mean()
+                spike = vol / avg_vol
 
-            if avg_vol == 0:
-                continue
+                if spike < SPIKE_THRESHOLD:
+                    continue
 
-            # =============================================
-            # SPIKE
-            # =============================================
+                close = data["Close"].iloc[i]
+                open_price = data["Open"].iloc[i]
+                rsi = data["RSI"].iloc[i]
 
-            spike = vol / avg_vol
+                if pd.isna(rsi):
+                    continue
 
-            if spike < SPIKE_THRESHOLD:
-                continue
+                e9 = data["EMA9"].iloc[i]
+                e15 = data["EMA15"].iloc[i]
+                e21 = data["EMA21"].iloc[i]
+                e50 = data["EMA50"].iloc[i]
+                e100 = data["EMA100"].iloc[i]
+                e200 = data["EMA200"].iloc[i]
 
-            # =============================================
-            # PRICE
-            # =============================================
+                # BUY CONDITION
+                if not (
+                    rsi > RSI_LEVEL and
+                    close > e9 > e15 > e21 > e50 > e100 > e200 and
+                    close > open_price
+                ):
+                    continue
 
-            close = data["Close"].iloc[i]
+                entry_price = data["Open"].iloc[i+1]
+                entry_time = data.index[i+1]
 
-            open_price = data["Open"].iloc[i]
+                qty = int(CAPITAL / entry_price)
 
-            rsi = data["RSI"].iloc[i]
+                if qty <= 0:
+                    continue
 
-            if pd.isna(rsi):
-                continue
+                exit_price = entry_price
+                exit_time = entry_time
+                reason = "HOLD"
 
-            # =============================================
-            # EMA VALUES
-            # =============================================
+                # EXIT LOOP
+                for j in range(i+2, len(data)):
 
-            e9 = data["EMA9"].iloc[i]
-            e15 = data["EMA15"].iloc[i]
-            e21 = data["EMA21"].iloc[i]
-            e50 = data["EMA50"].iloc[i]
-            e100 = data["EMA100"].iloc[i]
-            e200 = data["EMA200"].iloc[i]
+                    price = data["Close"].iloc[j]
+                    t = data.index[j].time()
 
-            # =============================================
-            # BUY CONDITION
-            # ONLY UPSIDE ENTRY
-            # =============================================
+                    if t >= EXIT_TIME:
+                        exit_price = price
+                        exit_time = data.index[j]
+                        reason = "3PM EXIT"
+                        break
 
-            buy = (
+                    if price <= entry_price * (1 - SL_PCT):
+                        exit_price = price
+                        exit_time = data.index[j]
+                        reason = "STOPLOSS"
+                        break
 
-                rsi > RSI_LEVEL and
+                    if price < data["EMA9"].iloc[j]:
+                        exit_price = price
+                        exit_time = data.index[j]
+                        reason = "EMA EXIT"
+                        break
 
-                close > e9 > e15 > e21 > e50 > e100 > e200 and
+                pnl = (exit_price - entry_price) * qty
+                CAPITAL += pnl
 
-                close > open_price
-            )
+                trades.append([stock, entry_time, exit_time, pnl, reason])
 
-            if not buy:
-                continue
+                last_exit_time = exit_time
 
-            # =============================================
-            # ENTRY
-            # =============================================
-
-            entry_price = data["Open"].iloc[i+1]
-
-            entry_time = data.index[i+1]
-
-            # =============================================
-            # QUANTITY
-            # =============================================
-
-            qty = int(CAPITAL / entry_price)
-
-            if qty <= 0:
-                continue
-
-            invested = qty * entry_price
-
-            # =============================================
-            # DEFAULT EXIT
-            # =============================================
-
-            exit_price = entry_price
-
-            exit_time = entry_time
-
-            exit_reason = "HOLD"
-
-            # =============================================
-            # EXIT LOOP
-            # =============================================
-
-            for j in range(i+2, len(data)):
-
-                current_price = data["Close"].iloc[j]
-
-                current_loop_time = data.index[j].time()
-
-                # =========================================
-                # 3 PM FORCE EXIT
-                # =========================================
-
-                if current_loop_time >= EXIT_TIME:
-
-                    exit_price = current_price
-
-                    exit_time = data.index[j]
-
-                    exit_reason = "3PM FORCE EXIT"
-
-                    break
-
-                # =========================================
-                # STOPLOSS
-                # =========================================
-
-                if current_price <= entry_price * (1 - SL_PCT):
-
-                    exit_price = current_price
-
-                    exit_time = data.index[j]
-
-                    exit_reason = "STOPLOSS"
-
-                    break
-
-                # =========================================
-                # EMA EXIT
-                # =========================================
-
-                if current_price < data["EMA9"].iloc[j]:
-
-                    exit_price = current_price
-
-                    exit_time = data.index[j]
-
-                    exit_reason = "EMA EXIT"
-
-                    break
-
-            # =============================================
-            # PNL
-            # =============================================
-
-            pnl_per_share = exit_price - entry_price
-
-            total_pnl = pnl_per_share * qty
-
-            trade_return = (
-
-                (total_pnl / invested) * 100
-
-            )
-
-            capital_after = CAPITAL + total_pnl
-
-            # =============================================
-            # SAVE TRADE
-            # =============================================
-
-            trades.append([
-
-                stock,
-
-                entry_time,
-                exit_time,
-
-                entry_price,
-                exit_price,
-
-                qty,
-
-                invested,
-
-                spike,
-
-                total_pnl,
-
-                trade_return,
-
-                capital_after,
-
-                exit_reason
-            ])
-
-            # =============================================
-            # UPDATE CAPITAL
-            # =============================================
-
-            CAPITAL = capital_after
-
-            last_exit_time = exit_time
-
-    except Exception as e:
-
-        print(f"ERROR in {stock} : {e}")
+        except Exception as e:
+            print("Error:", stock, e)
 
 # =========================================================
-# RESULTS
+# LIVE ENGINE (MON–FRI LOOP)
 # =========================================================
+while True:
 
-win = 0
-loss = 0
+    if market_open():
 
-print("\n=========== ONLY BUY STRATEGY ==========\n")
+        print("\n🔥 MARKET OPEN - RUNNING BOT")
 
-for t in trades:
+        run_bot()
 
-    if t[8] > 0:
-        win += 1
+        print("💰 CAPITAL:", round(CAPITAL, 2))
+        print("📊 TOTAL TRADES:", len(trades))
+
     else:
-        loss += 1
 
-    print(
+        print("⏳ MARKET CLOSED")
 
-        f"{t[0]:12} | "
-
-        f"BUY {t[1]} | "
-
-        f"SELL {t[2]} | "
-
-        f"Qty {t[5]} | "
-
-        f"Spike {t[7]:.2f}x | "
-
-        f"Entry {t[3]:.2f} | "
-
-        f"Exit {t[4]:.2f} | "
-
-        f"PnL ₹{t[8]:.2f} | "
-
-        f"Return {t[9]:.2f}% | "
-
-        f"Capital ₹{t[10]:.2f} | "
-
-        f"{t[11]}"
-    )
-
-# =========================================================
-# SUMMARY
-# =========================================================
-
-total = len(trades)
-
-winrate = (
-
-    (win / total) * 100
-
-    if total else 0
-)
-
-total_profit = CAPITAL - START_CAPITAL
-
-print("\n==============================")
-
-print("START CAPITAL :", round(START_CAPITAL, 2))
-
-print("FINAL CAPITAL :", round(CAPITAL, 2))
-
-if total_profit >= 0:
-
-    print("TOTAL PROFIT  : ₹", round(total_profit, 2))
-
-else:
-
-    print("TOTAL LOSS    : ₹", round(abs(total_profit), 2))
-
-print("TOTAL TRADES  :", total)
-
-print("WIN           :", win)
-
-print("LOSS          :", loss)
-
-print("WIN RATE      :", round(winrate, 2), "%")
-
-print("==============================")
-
-# हया कोड मध्ये काय काम होत लक्षात ठेवणे # 
-# BUY ENTRY फक्त UP TREND मध्ये होईल.
-#RSI 60 पेक्षा जास्त असेल तरच ENTRY मिळेल.
-#Volume Spike 8X पेक्षा जास्त हवा.
-#Price सर्व EMA च्या वर हवा:
-#EMA9 > EMA15 > EMA21 > EMA50 > EMA100 > EMA200
-#Candle GREEN असावी म्हणजे Close > Open.
-#Entry पुढच्या 5 मिनिट candle च्या OPEN वर होईल.
-#Entry Time फक्त 9:20 AM ते 3:00 PM मध्येच होईल.
-#एका वेळेस फक्त 1 TRADE चालेल.
-#DOWN SIDE / SHORT ENTRY नाही.
-#STOPLOSS = Entry पासून 2% खाली.
-#EXIT होईल जर Price EMA9 खाली गेला.
-#3:00 PM ला सर्व TRADE FORCE EXIT होतील.
-#Full Capital एका trade मध्ये वापरलं जाईल.
-#EXIT नंतरच पुढचा TRADE सुरू होईल.
-#Output मध्ये BUY Time, SELL Time, Entry, Exit, Profit/Loss सगळं दिसेल.
+    time.sleep(300)
