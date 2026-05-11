@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 # TWILIO SETUP
 # =========================================================
 account_sid = "AC39a3d89a71a3d05de1928c42a8e23754"
-auth_token = "YOUR_AUTH_TOKEN"   # ⚠️ तुमचा खरा Auth Token टाका
+auth_token = "95190c0106d0e29b6c17a3295b4e7622"   # ⚠️ तुमचा खरा Auth Token टाका
 
 client = Client(account_sid, auth_token)
 
