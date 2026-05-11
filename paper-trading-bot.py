@@ -1,6 +1,8 @@
 # =========================================================
 # AWS LIVE PAPER TRADING BOT + WHATSAPP ALERT (TWILIO)
-# ✅ Trailing Stop Loss Added
+# ✅ Runs 24x7 on AWS EC2
+# ✅ Trades ONLY during market hours (09:15 AM to 03:30 PM IST)
+# ✅ Trailing Stop Loss
 # ✅ One Trade Per Stock Per Day
 # =========================================================
 
@@ -18,7 +20,7 @@ warnings.filterwarnings("ignore")
 # TWILIO SETUP
 # =========================================================
 account_sid = "AC39a3d89a71a3d05de1928c42a8e23754"
-auth_token = "6f65d9eb89992cfa3f5eb80465c28a2b"
+auth_token = "YOUR_AUTH_TOKEN"   # ⚠️ तुमचा खरा Auth Token टाका
 
 client = Client(account_sid, auth_token)
 
@@ -50,8 +52,7 @@ stocks = [
     "AUROPHARMA","GLAND","AJANTPHARM","MANKIND","MEDANTA",
     "MAXHEALTH","FORTIS","RAINBOW","KIMS",
 
-    "M&M","HEROMOTOCO",
-    "TVSMOTOR","BHARATFORG","BALKRISIND",
+    "M&M","HEROMOTOCO","TVSMOTOR","BHARATFORG","BALKRISIND",
 
     "SIEMENS","CUMMINSIND","KEI","HAVELLS",
     "VOLTAS","BLUESTARCO","THERMAX","SCHNEIDER",
@@ -70,7 +71,7 @@ stocks = [
 
     "GRWRHITECH","PFIZER","SUNDARMFIN","FINEORG","BAYERCROP",
     "INGERRAND","NETWEB","KAYNES","ORISSAMINE","SCHAEFFLER",
-    "DATAPATTNS","CRISIL","THERMAX","AIAENG","BSE",
+    "DATAPATTNS","CRISIL","AIAENG","BSE",
     "FLUOROCHEM","BASF","ANANDRATHI","TIMKEN","SANOFI",
     "CEATLTD","RADICO","GRSE","PRUDENT","BBL","RATNAMANI",
     "MAZDOCK","POWERMECH","TIIL","SANSERA","GLAXO",
@@ -105,8 +106,15 @@ MAX_DAILY_LOSS = 5000
 DAILY_PNL = 0
 TRADING_DISABLED = False
 
+# Indian Market Timings
 MARKET_START = dtime(9, 15)
 MARKET_END = dtime(15, 30)
+
+# When market closed, sleep for 5 minutes
+CLOSED_SLEEP = 300
+
+# When market open, scan every 5 minutes
+OPEN_SLEEP = 300
 
 # =========================================================
 # ONE TRADE PER STOCK PER DAY
@@ -114,6 +122,8 @@ MARKET_END = dtime(15, 30)
 traded_today = set()
 current_trade_date = date.today()
 
+# =========================================================
+# RESET DAILY DATA
 # =========================================================
 def reset_daily_data():
     global traded_today, DAILY_PNL, TRADING_DISABLED, current_trade_date
@@ -125,54 +135,63 @@ def reset_daily_data():
         DAILY_PNL = 0
         TRADING_DISABLED = False
         current_trade_date = today
+
         print("🔄 New Trading Day Reset")
 
+        send_whatsapp(
+            f"🌅 New Trading Day Started\n"
+            f"Capital: {CAPITAL:.2f}"
+        )
+
+# =========================================================
+# CHECK MARKET OPEN
 # =========================================================
 def market_open():
     now = datetime.now()
 
+    # Stop if daily loss hit
     if TRADING_DISABLED:
         return False
 
-    if now.weekday() > 4:  # Saturday/Sunday
+    # Weekend check (Saturday=5, Sunday=6)
+    if now.weekday() > 4:
         return False
 
+    # Time check
     if now.time() < MARKET_START or now.time() >= MARKET_END:
         return False
 
     return True
 
 # =========================================================
+# RUN BOT
+# =========================================================
 def run_bot():
     global CAPITAL, DAILY_PNL, TRADING_DISABLED
 
     for stock in stocks:
         try:
-            # -------------------------------------------------
             # Skip if already traded today
-            # -------------------------------------------------
             if stock in traded_today:
                 continue
 
-            # -------------------------------------------------
-            # Download Data
-            # -------------------------------------------------
-            data = yf.Ticker(stock + ".NS").history(period="5d", interval="5m")
+            # Download latest 5-minute data
+            data = yf.Ticker(stock + ".NS").history(
+                period="5d",
+                interval="5m",
+                auto_adjust=True
+            )
 
             if data.empty or len(data) < 200:
                 continue
 
-            # -------------------------------------------------
             # Indicators
-            # -------------------------------------------------
             data["EMA9"] = data["Close"].ewm(span=9).mean()
             data["EMA15"] = data["Close"].ewm(span=15).mean()
             data["EMA21"] = data["Close"].ewm(span=21).mean()
             data["RSI"] = ta.momentum.RSIIndicator(data["Close"]).rsi()
 
-            # -------------------------------------------------
-            # Find Entry
-            # -------------------------------------------------
+            # Entry Scan
             for i in range(200, len(data) - 2):
 
                 vol = data["Volume"].iloc[i]
@@ -196,33 +215,29 @@ def run_bot():
 
                 # Quantity
                 qty = int(CAPITAL / entry_price)
-
                 if qty <= 0:
                     continue
 
-                # =====================================================
-                # INITIAL STOP LOSS
-                # =====================================================
+                # Initial Stop Loss
                 highest_price = entry_price
                 trailing_stop = entry_price * (1 - INITIAL_SL_PCT)
 
+                # Default Exit
                 exit_price = entry_price
                 exit_time = entry_time
                 reason = "MARKET CLOSE"
 
-                # =====================================================
-                # EXIT LOGIC WITH TRAILING STOP LOSS
-                # =====================================================
+                # Exit Logic
                 for j in range(i + 2, len(data)):
 
                     current_price = data["Close"].iloc[j]
 
-                    # Update highest price
+                    # Update trailing stop
                     if current_price > highest_price:
                         highest_price = current_price
                         trailing_stop = highest_price * (1 - TRAILING_SL_PCT)
 
-                    # Trailing Stop Loss Hit
+                    # Trailing Stop Loss
                     if current_price <= trailing_stop:
                         exit_price = current_price
                         exit_time = data.index[j]
@@ -236,38 +251,34 @@ def run_bot():
                         reason = "EMA EXIT"
                         break
 
-                    # If no exit, close at last candle
+                    # Last candle exit
                     exit_price = current_price
                     exit_time = data.index[j]
 
-                # =====================================================
-                # P&L Calculation
-                # =====================================================
+                # P&L
                 pnl = (exit_price - entry_price) * qty
 
                 CAPITAL += pnl
                 DAILY_PNL += pnl
 
-                # Mark stock as traded today
+                # Mark stock traded
                 traded_today.add(stock)
 
-                # =====================================================
-                # Print Output
-                # =====================================================
+                # Console Output
                 print("=" * 60)
                 print(f"📈 STOCK        : {stock}")
                 print(f"🕒 ENTRY TIME   : {entry_time}")
+                print(f"🕒 EXIT TIME    : {exit_time}")
                 print(f"💵 ENTRY PRICE  : {entry_price:.2f}")
                 print(f"💵 EXIT PRICE   : {exit_price:.2f}")
                 print(f"📦 QTY          : {qty}")
                 print(f"📌 REASON       : {reason}")
                 print(f"💰 PNL          : {pnl:.2f}")
+                print(f"📉 DAILY PNL    : {DAILY_PNL:.2f}")
                 print(f"💼 CAPITAL      : {CAPITAL:.2f}")
                 print("=" * 60)
 
-                # =====================================================
                 # WhatsApp Alert
-                # =====================================================
                 send_whatsapp(
                     f"📊 TRADE ALERT\n"
                     f"Stock: {stock}\n"
@@ -275,47 +286,67 @@ def run_bot():
                     f"Exit: {exit_price:.2f}\n"
                     f"Qty: {qty}\n"
                     f"PnL: {pnl:.2f}\n"
+                    f"Daily PnL: {DAILY_PNL:.2f}\n"
                     f"Reason: {reason}\n"
                     f"Capital: {CAPITAL:.2f}"
                 )
 
-                # =====================================================
                 # Daily Loss Protection
-                # =====================================================
                 if DAILY_PNL <= -MAX_DAILY_LOSS:
                     TRADING_DISABLED = True
 
+                    print("⛔ BOT STOPPED DUE TO DAILY LOSS LIMIT")
+
                     send_whatsapp(
                         f"🚨 BOT STOPPED\n"
-                        f"Daily Loss Hit: {DAILY_PNL:.2f}"
+                        f"Daily Loss Limit Hit\n"
+                        f"Daily PnL: {DAILY_PNL:.2f}"
                     )
 
-                    print("⛔ BOT STOPPED DUE TO DAILY LOSS LIMIT")
                     return
 
-                # One trade per stock per day → stop scanning this stock
+                # Only one trade per stock per day
                 break
 
         except Exception as e:
             print("❌ Error:", stock, e)
 
 # =========================================================
-# MAIN LOOP
+# MAIN LOOP - RUNS 24x7
 # =========================================================
-print("🚀 BOT STARTED WITH TRAILING STOP LOSS + ONE TRADE PER STOCK PER DAY")
+print("🚀 BOT STARTED (24x7 Mode)")
+print("📈 Trades only during market hours")
+print("🕘 Market Time: 09:15 AM to 03:30 PM IST")
+
+send_whatsapp("🚀 Paper Trading Bot Started on AWS (24x7 Mode)")
 
 while True:
-    # Reset at new day
-    reset_daily_data()
+    try:
+        # Reset every new day
+        reset_daily_data()
 
-    if market_open():
-        print("\n🔥 MARKET OPEN")
-        run_bot()
-        print(f"💰 CAPITAL: {CAPITAL:.2f}")
-        print(f"📉 DAILY PNL: {DAILY_PNL:.2f}")
-        print(f"📌 TRADED TODAY: {len(traded_today)} stocks")
-        time.sleep(300)   # 5 minutes
+        if market_open():
+            print(f"\n🔥 MARKET OPEN - {datetime.now()}")
+            run_bot()
 
-    else:
-        print("⏳ MARKET CLOSED")
-        time.sleep(300)
+            print(f"💼 CAPITAL      : {CAPITAL:.2f}")
+            print(f"📉 DAILY PNL    : {DAILY_PNL:.2f}")
+            print(f"📌 TRADED TODAY : {len(traded_today)} stocks")
+
+            # Scan every 5 minutes
+            time.sleep(OPEN_SLEEP)
+
+        else:
+            print(f"⏳ MARKET CLOSED - {datetime.now()}")
+
+            # Sleep 5 minutes and check again
+            # Bot remains alive 24x7
+            time.sleep(CLOSED_SLEEP)
+
+    except Exception as e:
+        print("❌ MAIN LOOP ERROR:", e)
+
+        send_whatsapp(f"⚠️ Bot Error: {e}")
+
+        # Wait 1 minute and continue
+        time.sleep(60)
