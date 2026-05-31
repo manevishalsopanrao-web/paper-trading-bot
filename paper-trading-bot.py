@@ -1,366 +1,160 @@
-# =========================================================
-# AWS LIVE PAPER TRADING BOT + WHATSAPP ALERT (TWILIO)
-# ✅ Runs 24x7 on AWS EC2
-# ✅ Trades ONLY during market hours (09:15 AM to 03:30 PM IST)
-# ✅ Asia/Kolkata Timezone Fixed
-# ✅ Trailing Stop Loss
-# ✅ One Trade Per Stock Per Day
-# =========================================================
-
+import requests
 import yfinance as yf
-import ta
 import pandas as pd
-import warnings
+import pytz
 import time
-from datetime import datetime, time as dtime, date
-from zoneinfo import ZoneInfo
-from twilio.rest import Client
 
-warnings.filterwarnings("ignore")
+# ==========================
+# TELEGRAM CONFIG
+# ==========================
+BOT_TOKEN = "8963361139:AAFcppLM_XRprJQ02PuSAglNIba7jy2Pk5g"
+CHAT_ID = "6456813373"
 
-# =========================================================
-# TIMEZONE (INDIA)
-# =========================================================
-IST = ZoneInfo("Asia/Kolkata")
-
-# =========================================================
-# TWILIO SETUP
-# =========================================================
-account_sid = "AC39a3d89a71a3d05de1928c42a8e23754"
-auth_token = "95190c0106d0e29b6c17a3295b4e7622"   # ⚠️ तुमचा खरा Auth Token टाका
-
-client = Client(account_sid, auth_token)
-
-YOUR_WHATSAPP = "whatsapp:+918888135316"
-TWILIO_NUMBER = "whatsapp:+14155238886"
-
-def send_whatsapp(msg):
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        client.messages.create(
-            from_=TWILIO_NUMBER,
-            to=YOUR_WHATSAPP,
-            body=msg
-        )
-        print("📲 WhatsApp Sent")
+        requests.post(url, data={
+            "chat_id": CHAT_ID,
+            "text": message
+        })
     except Exception as e:
-        print("❌ WhatsApp Error:", e)
+        print("Telegram Error:", e)
 
-# =========================================================
-# FULL STOCK LIST (UNCHANGED)
-# =========================================================
+# ==========================
+# STOCK LIST
+# ==========================
 stocks = [
-    "RELIANCE","HDFCBANK","ICICIBANK","SBIN","KOTAKBANK","AXISBANK",
-    "BAJFINANCE","BAJAJFINSV","CHOLAFIN","SHRIRAMFIN","LICHSGFIN",
-    "AUBANK","MUTHOOTFIN","INFY","TCS","HCLTECH","TECHM",
-    "PERSISTENT","COFORGE","MPHASIS","TATAELXSI","LTTS",
-    "SONATSOFTW","INTELLECT","BSOFT","KPITTECH",
-
-    "SUNPHARMA","CIPLA","DRREDDY","TORNTPHARM","LUPIN",
-    "AUROPHARMA","GLAND","AJANTPHARM","MANKIND","MEDANTA",
-    "MAXHEALTH","FORTIS","RAINBOW","KIMS",
-
-    "M&M","HEROMOTOCO","TVSMOTOR","BHARATFORG","BALKRISIND",
-
-    "SIEMENS","CUMMINSIND","KEI","HAVELLS",
-    "VOLTAS","BLUESTARCO","THERMAX","SCHNEIDER",
-
-    "LT","GRASIM","PIDILITIND","ASTRAL",
-    "APLAPOLLO","DALBHARAT","JKCEMENT","KAJARIACER",
-
-    "TITAN","TRENT","DMART","BRITANNIA","NESTLEIND",
-    "HINDUNILVR","MARICO","COLPAL",
-
-    "ADANIENT","ADANIPORTS","HAL","BEL","BDL","MCX",
-    "CDSL","CAMS","NAUKRI","INDIAMART","POLICYBZR",
-
-    "TORNTPOWER","JSWENERGY","CGPOWER",
-    "TATACOMM","INDIGO","OBEROIRLTY","PHOENIXLTD",
-
-    "GRWRHITECH","PFIZER","SUNDARMFIN","FINEORG","BAYERCROP",
-    "INGERRAND","NETWEB","KAYNES","ORISSAMINE","SCHAEFFLER",
-    "DATAPATTNS","CRISIL","AIAENG","BSE",
-    "FLUOROCHEM","BASF","ANANDRATHI","TIMKEN","SANOFI",
-    "CEATLTD","RADICO","GRSE","PRUDENT","BBL","RATNAMANI",
-    "MAZDOCK","POWERMECH","TIIL","SANSERA","GLAXO",
-    "ETHOSLTD","DOMS","ENDURANCE","STYLAMIND","GODFRYPHLP",
-    "FIEMIND","AZAD","JBCHEPHARM","BEML","CAPLIPOINT",
-    "CARTRADE","RRKABEL","GRAVITA","LLOYDSME","ALKYLAMINE",
-    "COCHINSHIP","KIRLOSBROS","WOCKPHARMA","NEOGEN",
-    "SKFINDIA","MASTEK","EMCURE","POLYMED","TEGA",
-    "GRINDWELL","VENKEYS","ECLERX","ZENTEC","KIRLPNU",
-    "BBTC","ABREL","BHARTIHEXA","INOXINDIA","WABAG",
-    "BALAMINES","SAFARI","VEEDOL","SOBHA","AFFLE",
-    "LUXIND","AAVAS","NUVAMA","VENUSPIPES","VINATIORGA",
-    "ERIS","EPIGRAL","TEAMLEASE","DEEPAKFERT",
-    "DCMSHRIRAM","TECHNOE","KPIL","NESCO","CIGNITITEC",
-    "OLECTRA","TBOTEK","HOMEFIRST","CONCORDBIO",
-    "ENTERO","VIJAYA"
+    "MARUTI.NS","M&M.NS","BAJAJ-AUTO.NS","HEROMOTOCO.NS",
+    "EICHERMOT.NS","TVSMOTOR.NS","ASHOKLEY.NS","BHARATFORG.NS",
+    "HDFCBANK.NS","ICICIBANK.NS","SBIN.NS","AXISBANK.NS",
+    "KOTAKBANK.NS","PNB.NS","BANKBARODA.NS","TCS.NS",
+    "INFY.NS","WIPRO.NS","HCLTECH.NS","TECHM.NS",
+    "PERSISTENT.NS","COFORGE.NS","SUNPHARMA.NS","DIVISLAB.NS",
+    "DRREDDY.NS","CIPLA.NS","SAIL.NS","NMDC.NS",
+    "LUPIN.NS","AUROPHARMA.NS","RELIANCE.NS","NTPC.NS",
+    "POWERGRID.NS","IOC.NS","BPCL.NS","ONGC.NS"
 ]
 
-# =========================================================
-# SETTINGS
-# =========================================================
-SPIKE_THRESHOLD = 8
-RSI_LEVEL = 60
+india = pytz.timezone("Asia/Kolkata")
+DMI_LENGTH = 2
 
-INITIAL_SL_PCT = 0.02      # Initial Stop Loss = 2%
-TRAILING_SL_PCT = 0.02     # Trailing Stop Loss = 2%
+# ==========================
+# DMI FUNCTION
+# ==========================
+def calculate_dmi(df, period=2):
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
 
-START_CAPITAL = 100000
-CAPITAL = START_CAPITAL
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
 
-MAX_DAILY_LOSS = 5000
-DAILY_PNL = 0
-TRADING_DISABLED = False
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
 
-# Market Timings (IST)
-MARKET_START = dtime(9, 15)
-MARKET_END = dtime(15, 30)
+    tr1 = high - low
+    tr2 = (high - close.shift()).abs()
+    tr3 = (low - close.shift()).abs()
 
-# Sleep intervals (seconds)
-CLOSED_SLEEP = 300   # 5 minutes
-OPEN_SLEEP = 300     # 5 minutes
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(period).sum()
 
-# =========================================================
-# ONE TRADE PER STOCK PER DAY
-# =========================================================
-traded_today = set()
-current_trade_date = datetime.now(IST).date()
+    plus_di = 100 * plus_dm.rolling(period).sum() / atr
+    minus_di = 100 * minus_dm.rolling(period).sum() / atr
 
-# =========================================================
-# GET CURRENT IST TIME
-# =========================================================
-def now_ist():
-    return datetime.now(IST)
+    return plus_di, minus_di
 
-# =========================================================
-# RESET DAILY DATA
-# =========================================================
-def reset_daily_data():
-    global traded_today, DAILY_PNL, TRADING_DISABLED, current_trade_date
+# ==========================
+# ALERT TRACKING (duplicate avoid)
+# ==========================
+sent_alerts = set()
 
-    today = now_ist().date()
+print("Scanning started...")
 
-    if today != current_trade_date:
-        traded_today = set()
-        DAILY_PNL = 0
-        TRADING_DISABLED = False
-        current_trade_date = today
+# ==========================
+# MAIN LOOP
+# ==========================
+while True:
 
-        print("🔄 New Trading Day Reset")
-
-        send_whatsapp(
-            f"🌅 New Trading Day Started\n"
-            f"Date: {today}\n"
-            f"Capital: {CAPITAL:.2f}"
-        )
-
-# =========================================================
-# CHECK MARKET OPEN (IST)
-# =========================================================
-def market_open():
-    now = now_ist()
-
-    # Stop if daily loss hit
-    if TRADING_DISABLED:
-        return False
-
-    # Weekend check (Saturday=5, Sunday=6)
-    if now.weekday() > 4:
-        return False
-
-    # Time check
-    current_time = now.time()
-    if current_time < MARKET_START or current_time >= MARKET_END:
-        return False
-
-    return True
-
-# =========================================================
-# RUN BOT
-# =========================================================
-def run_bot():
-    global CAPITAL, DAILY_PNL, TRADING_DISABLED
+    results = []
 
     for stock in stocks:
-        try:
-            # Skip if already traded today
-            if stock in traded_today:
-                continue
 
-            # Download latest 5-minute data
-            data = yf.Ticker(stock + ".NS").history(
-                period="5d",
+        try:
+            df = yf.download(
+                stock,
+                period="1d",
                 interval="5m",
-                auto_adjust=True
+                auto_adjust=True,
+                progress=False
             )
 
-            if data.empty or len(data) < 200:
+            if df.empty:
                 continue
 
-            # Indicators
-            data["EMA9"] = data["Close"].ewm(span=9).mean()
-            data["EMA15"] = data["Close"].ewm(span=15).mean()
-            data["EMA21"] = data["Close"].ewm(span=21).mean()
-            data["RSI"] = ta.momentum.RSIIndicator(data["Close"]).rsi()
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
-            # Entry Scan
-            for i in range(200, len(data) - 2):
+            try:
+                df.index = df.index.tz_convert(india)
+            except:
+                df.index = df.index.tz_localize("UTC").tz_convert(india)
 
-                vol = data["Volume"].iloc[i]
-                avg_vol = data["Volume"].iloc[i-20:i].mean()
+            # EMA
+            for span in [9,15,21,50,100,200]:
+                df[f"EMA{span}"] = df["Close"].ewm(span=span).mean()
 
-                if avg_vol == 0:
-                    continue
+            # MACD
+            ema12 = df["Close"].ewm(span=12).mean()
+            ema26 = df["Close"].ewm(span=26).mean()
+            df["MACD"] = ema12 - ema26
+            df["SIGNAL"] = df["MACD"].ewm(span=9).mean()
 
-                # Volume Spike
-                if vol / avg_vol < SPIKE_THRESHOLD:
-                    continue
+            # DMI
+            plus_di, minus_di = calculate_dmi(df, DMI_LENGTH)
+            df["PLUS_DI"] = plus_di
+            df["MINUS_DI"] = minus_di
 
-                # RSI Filter
-                rsi = data["RSI"].iloc[i]
-                if pd.isna(rsi) or rsi < RSI_LEVEL:
-                    continue
+            # CHECK LAST CANDLE ONLY (fast + live)
+            row = df.iloc[-1]
+            idx = df.index[-1]
 
-                # Entry
-                entry_price = data["Open"].iloc[i + 1]
-                entry_time = data.index[i + 1]
+            if idx.hour == 9 and 15 <= idx.minute <= 45:
 
-                # Quantity
-                qty = int(CAPITAL / entry_price)
-                if qty <= 0:
-                    continue
+                close = row["Close"]
 
-                # Initial Stop Loss
-                highest_price = entry_price
-                trailing_stop = entry_price * (1 - INITIAL_SL_PCT)
-
-                # Default Exit
-                exit_price = entry_price
-                exit_time = entry_time
-                reason = "MARKET CLOSE"
-
-                # Exit Logic
-                for j in range(i + 2, len(data)):
-
-                    current_price = data["Close"].iloc[j]
-
-                    # Update trailing stop
-                    if current_price > highest_price:
-                        highest_price = current_price
-                        trailing_stop = highest_price * (1 - TRAILING_SL_PCT)
-
-                    # Trailing Stop Loss
-                    if current_price <= trailing_stop:
-                        exit_price = current_price
-                        exit_time = data.index[j]
-                        reason = "TRAILING STOPLOSS"
-                        break
-
-                    # EMA Exit
-                    if current_price < data["EMA9"].iloc[j]:
-                        exit_price = current_price
-                        exit_time = data.index[j]
-                        reason = "EMA EXIT"
-                        break
-
-                    # Last candle exit
-                    exit_price = current_price
-                    exit_time = data.index[j]
-
-                # P&L
-                pnl = (exit_price - entry_price) * qty
-
-                CAPITAL += pnl
-                DAILY_PNL += pnl
-
-                # Mark stock traded
-                traded_today.add(stock)
-
-                # Console Output
-                print("=" * 60)
-                print(f"📈 STOCK        : {stock}")
-                print(f"🕒 ENTRY TIME   : {entry_time}")
-                print(f"🕒 EXIT TIME    : {exit_time}")
-                print(f"💵 ENTRY PRICE  : {entry_price:.2f}")
-                print(f"💵 EXIT PRICE   : {exit_price:.2f}")
-                print(f"📦 QTY          : {qty}")
-                print(f"📌 REASON       : {reason}")
-                print(f"💰 PNL          : {pnl:.2f}")
-                print(f"📉 DAILY PNL    : {DAILY_PNL:.2f}")
-                print(f"💼 CAPITAL      : {CAPITAL:.2f}")
-                print("=" * 60)
-
-                # WhatsApp Alert
-                send_whatsapp(
-                    f"📊 TRADE ALERT\n"
-                    f"Stock: {stock}\n"
-                    f"Entry: {entry_price:.2f}\n"
-                    f"Exit: {exit_price:.2f}\n"
-                    f"Qty: {qty}\n"
-                    f"PnL: {pnl:.2f}\n"
-                    f"Daily PnL: {DAILY_PNL:.2f}\n"
-                    f"Reason: {reason}\n"
-                    f"Capital: {CAPITAL:.2f}"
+                ema_negative = (
+                    close < row["EMA9"] and
+                    close < row["EMA15"] and
+                    close < row["EMA21"] and
+                    close < row["EMA50"] and
+                    close < row["EMA100"] and
+                    close < row["EMA200"]
                 )
 
-                # Daily Loss Protection
-                if DAILY_PNL <= -MAX_DAILY_LOSS:
-                    TRADING_DISABLED = True
+                macd_negative = row["MACD"] < row["SIGNAL"]
+                dmi_negative = row["MINUS_DI"] >= 60
 
-                    print("⛔ BOT STOPPED DUE TO DAILY LOSS LIMIT")
+                if ema_negative and macd_negative and dmi_negative:
 
-                    send_whatsapp(
-                        f"🚨 BOT STOPPED\n"
-                        f"Daily Loss Limit Hit\n"
-                        f"Daily PnL: {DAILY_PNL:.2f}"
-                    )
-                    return
+                    alert_key = f"{stock}-{idx}"
 
-                # Only one trade per stock per day
-                break
+                    if alert_key not in sent_alerts:
+                        sent_alerts.add(alert_key)
+
+                        msg = (
+                            f"📉 Negative Trend Alert\n\n"
+                            f"Stock: {stock}\n"
+                            f"Time: {idx.strftime('%H:%M')}\n"
+                            f"DMI: {row['MINUS_DI']:.2f}\n"
+                            f"MACD: Bearish\n"
+                        )
+
+                        print(msg)
+                        send_telegram(msg)
 
         except Exception as e:
-            print("❌ Error:", stock, e)
+            print(f"{stock} Error: {e}")
 
-# =========================================================
-# MAIN LOOP - RUNS 24x7
-# =========================================================
-print("🚀 BOT STARTED (24x7 Mode)")
-print("📈 Trades only during market hours")
-print("🕘 Market Time: 09:15 AM to 03:30 PM IST")
-print(f"🌏 Timezone: {IST}")
-
-send_whatsapp("🚀 Paper Trading Bot Started on AWS (24x7 Mode, Asia/Kolkata)")
-
-while True:
-    try:
-        # Reset every new day
-        reset_daily_data()
-
-        current_time = now_ist()
-
-        if market_open():
-            print(f"\n🔥 MARKET OPEN - {current_time}")
-            run_bot()
-
-            print(f"💼 CAPITAL      : {CAPITAL:.2f}")
-            print(f"📉 DAILY PNL    : {DAILY_PNL:.2f}")
-            print(f"📌 TRADED TODAY : {len(traded_today)} stocks")
-
-            # Scan every 5 minutes
-            time.sleep(OPEN_SLEEP)
-
-        else:
-            print(f"⏳ MARKET CLOSED - {current_time}")
-
-            # Sleep 5 minutes and check again
-            time.sleep(CLOSED_SLEEP)
-
-    except Exception as e:
-        print("❌ MAIN LOOP ERROR:", e)
-
-        send_whatsapp(f"⚠️ Bot Error: {e}")
-
-        # Wait 1 minute and continue
-        time.sleep(60)
+    print("Scan complete. Sleeping 60 sec...\n")
+    time.sleep(60)
