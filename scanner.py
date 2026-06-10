@@ -480,9 +480,10 @@ if not result_df.empty:
             ]
         ].to_string(index=False)
     )
+    top5_down.to_csv("signals.csv", index=False)
 
-else:
-    print("No Data Found")
+print("\nSignals Saved : signals.csv")
+
 
 # ==================================
 # FLASK DASHBOARD
